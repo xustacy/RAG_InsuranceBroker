@@ -116,10 +116,15 @@ def create_gradio_interface():
     def chat_interface(message: str, history: List) -> tuple:
         """Chat interface handler"""
         try:
+            if not message:
+                return history
             answer, _ = interviewer.chat(message)
-            return answer
+            history.append((message, answer))
+            return history
         except Exception as e:
-            return f"Error: {str(e)}. Please ensure OPENAI_API_KEY is set in environment variables."
+            error_msg = f"Error: {str(e)}. Please ensure OPENAI_API_KEY is set in environment variables."
+            history.append((message, error_msg))
+            return history
     
     def upload_documents(file):
         """Handle document upload"""
@@ -140,7 +145,7 @@ def create_gradio_interface():
     def reset():
         """Reset conversation"""
         interviewer.reset_conversation()
-        return None
+        return []
     
     # Create Gradio interface
     with gr.Blocks(title="RAG Toxic Interviewer") as demo:
@@ -172,7 +177,7 @@ def create_gradio_interface():
         submit.click(
             chat_interface,
             inputs=[msg, chatbot],
-            outputs=[msg]
+            outputs=[chatbot]
         ).then(
             lambda: "", None, msg
         )
@@ -180,7 +185,7 @@ def create_gradio_interface():
         msg.submit(
             chat_interface,
             inputs=[msg, chatbot],
-            outputs=[msg]
+            outputs=[chatbot]
         ).then(
             lambda: "", None, msg
         )
