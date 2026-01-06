@@ -45,13 +45,20 @@ GDRIVE_FILE_ID = "1iwvWuIZlLRzirPlOZAwJhNlnCza9y5Yt"
 # ==========================================
 # 3. 定義 Embedding 模型
 # ==========================================
-def get_embeddings():
-    """建立與資料庫相同配置的 embedding 模型"""
-    return HuggingFaceEmbeddings(
-        model_name="google/embeddinggemma-300m",
-        encode_kwargs={"normalize_embeddings": True},
-        model_kwargs={"device": "cpu"}
-    )
+class EmbeddingGemmaEmbeddings(HuggingFaceEmbeddings):
+    def __init__(self, **kwargs):
+        super().__init__(
+            model_name="google/embeddinggemma-300m",
+            encode_kwargs={"normalize_embeddings": True},
+            **kwargs
+        )
+
+    def embed_documents(self, texts):
+        texts = [f"title: 保險商品條款 | text: {t}" for t in texts]
+        return super().embed_documents(texts)
+
+    def embed_query(self, text):
+        return super().embed_query(f"task: search result | query: {text}")
 
 # ==========================================
 # 4. 載入資源 (下載 -> 解壓 -> 讀取)
@@ -82,17 +89,16 @@ def load_resources():
 
     # 載入 FAISS
     try:
-        embeddings = get_embeddings()
+        embeddings = EmbeddingGemmaEmbeddings()
         db = FAISS.load_local(
             folder_name, 
             embeddings,
             allow_dangerous_deserialization=True
         )
-        st.success("✅ 資料庫載入成功！")
         return db
     except Exception as e:
+        # 如果還是失敗，很有可能是 token 權限或網路問題
         st.error(f"資料庫讀取失敗：{e}")
-        st.error(f"錯誤詳情：{type(e).__name__}")
         return None
 
 vectorstore = load_resources()
