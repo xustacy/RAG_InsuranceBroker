@@ -40,28 +40,30 @@ def get_embeddings():
     )
 
 # ==========================================
-# 4. 載入資源
+# 4. 載入資源 (⚠️ 修正點：純淨版，不含任何 UI 指令)
 # ==========================================
-@st.cache_resource
+@st.cache_resource(show_spinner=False) # 關閉內建 spinner，完全由我們控制
 def load_resources():
+    """
+    這個函式只負責運算與資料讀取，
+    絕對不包含 st.spinner, st.error 等 UI 互動。
+    """
+    # 1. 下載與解壓縮 (只做動作，不顯示 st 訊息)
     if not os.path.exists(DB_FOLDER):
         if not os.path.exists(ZIP_NAME):
-            with st.spinner("📦 正在從雲端下載資料庫..."):
-                try:
-                    url = f'https://drive.google.com/uc?id={GDRIVE_FILE_ID}'
-                    gdown.download(url, ZIP_NAME, quiet=False)
-                except Exception as e:
-                    st.error(f"下載失敗: {e}")
-                    return None
-        
-        with st.spinner("📂 解壓縮資料庫..."):
             try:
-                with zipfile.ZipFile(ZIP_NAME, 'r') as zip_ref:
-                    zip_ref.extractall(".")
-            except Exception as e:
-                st.error(f"解壓縮失敗: {e}")
-                return None
+                url = f'https://drive.google.com/uc?id={GDRIVE_FILE_ID}'
+                gdown.download(url, ZIP_NAME, quiet=False)
+            except:
+                return None # 失敗就回傳 None，讓外面處理
+        
+        try:
+            with zipfile.ZipFile(ZIP_NAME, 'r') as zip_ref:
+                zip_ref.extractall(".")
+        except:
+            return None
 
+    # 2. 載入 FAISS
     try:
         embeddings = get_embeddings()
         if os.path.exists(DB_FOLDER):
@@ -74,19 +76,23 @@ def load_resources():
             embeddings,
             allow_dangerous_deserialization=True
         )
-        st.toast("✅ 資料庫連線成功！", icon="🧠")
         return db
-    except Exception as e:
-        st.error(f"資料庫讀取失敗：{e}")
+    except:
         return None
 
-vectorstore = load_resources()
+# --- 在「函式外面」做轉圈圈特效 ---
+with st.spinner("📦 系統啟動中，正在載入保險資料庫..."):
+    vectorstore = load_resources()
 
+# --- 根據結果顯示 UI ---
 if not vectorstore:
+    st.error("❌ 資料庫載入失敗！請檢查 Requirements 或 Google Drive 連結。")
     st.stop()
+else:
+    # 成功載入後，偷偷給個小提示 (這是安全的，因為不在 cache 函式裡)
+    st.toast("✅ 資料庫載入成功！", icon="🧠")
 
-# 🔥 改良點 1：擴大搜尋範圍 k=8 (原本是 4)
-# 這樣 AI 可以讀到更多上下文，避免斷章取義
+# 設定檢索器 (k=8 擴大搜尋範圍)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
 
 # ==========================================
@@ -99,7 +105,7 @@ llm = ChatGroq(
 )
 
 # ==========================================
-# 6. Prompt 與 Chain (🔥 改良點 2：更聰明的提示詞)
+# 6. Prompt 與 Chain
 # ==========================================
 persona_instruction = """
 你是專業、靈活且富有洞察力的資深保險顧問。
@@ -136,7 +142,7 @@ qa_chain = (
 )
 
 # ==========================================
-# 7. 介面功能 (🔥 改良點 3：加入 Debug 視窗)
+# 7. 介面功能 (含 Debug 視窗)
 # ==========================================
 tab1, tab2 = st.tabs(["💬 線上保險諮詢", "📋 智能保險推薦"])
 
@@ -158,21 +164,19 @@ with tab1:
         with st.chat_message("assistant"):
             with st.spinner("🔍 AI 正在翻閱條款並進行推理..."):
                 try:
-                    # 1. 這裡我們手動執行一次檢索，為了顯示在 UI 上
+                    # Debug: 顯示抓到的資料
                     retrieved_docs = retriever.invoke(prompt)
                     
-                    # === Debug 區塊 (這就是讓您知道 AI 有沒有變笨的關鍵) ===
                     with st.expander("🕵️ [工程師模式] 點擊查看 AI 讀到了哪些資料"):
                         if not retrieved_docs:
-                            st.warning("⚠️ 系統沒有抓到任何資料，請檢查關鍵字或資料庫。")
+                            st.warning("⚠️ 系統沒有抓到任何資料。")
                         for i, doc in enumerate(retrieved_docs):
                             source = doc.metadata.get('source', doc.metadata.get('filename', '未知來源'))
                             st.markdown(f"**📄 參考文件 {i+1} ({source})**")
-                            st.caption(doc.page_content[:300] + "...") # 只顯示前300字預覽
+                            st.caption(doc.page_content[:300] + "...") 
                             st.divider()
-                    # ===================================================
 
-                    # 2. 正常回答
+                    # 產生回答
                     response = qa_chain.invoke(prompt)
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
@@ -201,7 +205,6 @@ with tab2:
 
         if st.button("開始 AI 分析"):
             with st.spinner("🤖 AI 正在綜合評估..."):
-                # 優化查詢語句，加入明確指令
                 query = f"""
                 使用者背景：{gender}, {age}歲, 職業{job}, 年收{salary}, 預算{budget}。
                 需求：想找{ins_type}。{extra_info}。
@@ -212,7 +215,6 @@ with tab2:
                 3. 請推薦 1-2 個具體商品，並說明推薦原因。
                 """
                 
-                # 同樣加入 Debug 視窗
                 retrieved_docs = retriever.invoke(query)
                 with st.expander("🕵️ [工程師模式] AI 檢索到的條款內容"):
                     for i, doc in enumerate(retrieved_docs):
