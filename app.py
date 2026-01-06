@@ -4,8 +4,9 @@ import gdown
 import zipfile
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.prompts import PromptTemplate
-from langchain.chains import RetrievalQA
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI
 from huggingface_hub import login
 
@@ -119,34 +120,33 @@ llm = ChatOpenAI(
 # 5. Prompt 設定
 # ==========================================
 persona_instruction = """
-你是專業且充滿熱忱的保險業務員，致力於提供最優質的服務。
+你是專業且充滿熱忱的保險業務員,致力於提供最優質的服務。
 你擁有市面上幾家大型保險公司的所有保險商品資料。
 
 請務必嚴格遵守以下規則：
 1. **只能**根據下方的【已知資訊】來回答問題。
-2. 若資料不足或題目超過能力範圍，請回答：「不好意思，目前的內部資料庫中沒有相關資訊，建議您直接洽詢該保險公司的專人客服服務。」
+2. 若資料不足或題目超過能力範圍,請回答：「不好意思,目前的內部資料庫中沒有相關資訊,建議您直接洽詢該保險公司的專人客服服務。」
 3. **拒絕回答**任何跟保險以外相關內容。
-4. 語氣保持親切友善、專業簡潔，並使用台灣繁體中文。
+4. 語氣保持親切友善、專業簡潔,並使用台灣繁體中文。
 """
 
-qa_prompt = PromptTemplate(
-    template=persona_instruction + """
-    
-    【已知資訊】：
-    {context}
-    
-    使用者問題：{question}
-    
-    專業業務員回覆：
-    """,
-    input_variables=["context", "question"]
-)
+qa_prompt = ChatPromptTemplate.from_messages([
+    ("system", persona_instruction + "\n\n【已知資訊】：\n{context}"),
+    ("human", "{question}")
+])
 
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever,
-    chain_type="stuff",
-    chain_type_kwargs={"prompt": qa_prompt}
+# 使用 LCEL (LangChain Expression Language) 建立鏈
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+qa_chain = (
+    {
+        "context": retriever | format_docs,
+        "question": RunnablePassthrough()
+    }
+    | qa_prompt
+    | llm
+    | StrOutputParser()
 )
 
 # ==========================================
@@ -171,9 +171,9 @@ with tab1:
         with st.chat_message("assistant"):
             with st.spinner("正在查閱保險條款..."):
                 try:
-                    response = qa_chain.invoke({"query": prompt})
-                    st.markdown(response["result"])
-                    st.session_state.messages.append({"role": "assistant", "content": response["result"]})
+                    response = qa_chain.invoke(prompt)
+                    st.markdown(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                 except Exception as e:
                     st.error(f"錯誤：{e}")
 
@@ -200,5 +200,5 @@ with tab2:
         if st.button("開始分析"):
             with st.spinner("分析中..."):
                 query = f"使用者：{gender}, {age}歲, 職業{job}, 年收{salary}, 預算{budget}。想找{ins_type}。{extra_info}。請推薦商品。"
-                response = qa_chain.invoke({"query": query})
-                st.markdown(response["result"])
+                response = qa_chain.invoke(query)
+                st.markdown(response)
