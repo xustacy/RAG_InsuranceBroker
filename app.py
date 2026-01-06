@@ -7,16 +7,42 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_openai import ChatOpenAI
+from huggingface_hub import login # 新增這個套件
 
 # ==========================================
-# 1. 設定區：請填入您的 Google Drive File ID
+# 1. 系統設定與金鑰檢查
 # ==========================================
-# 範例：如果連結是 https://drive.google.com/file/d/1xxxx/view...
-# 這裡就填入 "1xxxx"
-GDRIVE_FILE_ID = "1iwvWuIZlLRzirPlOZAwJhNlnCza9y5Yt" 
+st.set_page_config(page_title="專業保險諮詢 AI", layout="wide")
+st.title("🛡️ 專業保險諮詢與推薦系統")
+
+# 檢查與設定 Groq 金鑰
+if "GROQ_API_KEY" in st.secrets:
+    os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+    api_key = st.secrets["GROQ_API_KEY"]
+else:
+    st.error("❌ 未設定 GROQ_API_KEY，請至 Secrets 設定。")
+    st.stop()
+
+# 檢查與設定 Hugging Face 金鑰 (這是解決 401 錯誤的關鍵！)
+if "HF_TOKEN" in st.secrets:
+    try:
+        login(token=st.secrets["HF_TOKEN"])
+        st.toast("✅ Hugging Face 登入成功", icon="🎉")
+    except Exception as e:
+        st.error(f"Hugging Face 登入失敗: {e}")
+        st.stop()
+else:
+    st.error("❌ 錯誤：未設定 HF_TOKEN (Hugging Face Token)。\n由於 'google/embeddinggemma-300m' 是受管制模型，您必須：\n1. 去 Hugging Face 官網該模型頁面同意條款。\n2. 申請 Read Token 並填入 Streamlit Secrets。")
+    st.stop()
 
 # ==========================================
-# 2. 定義 Embedding 模型 (必須與建立時一致)
+# 2. 設定 Google Drive 下載
+# ==========================================
+# 請確認這是您最新的、正確的 File ID
+GDRIVE_FILE_ID = "1iwvWuIZlLRzirPlOZAwJhNlnCza9y5Yt"
+
+# ==========================================
+# 3. 定義 Embedding 模型
 # ==========================================
 class EmbeddingGemmaEmbeddings(HuggingFaceEmbeddings):
     def __init__(self, **kwargs):
@@ -27,7 +53,6 @@ class EmbeddingGemmaEmbeddings(HuggingFaceEmbeddings):
         )
 
     def embed_documents(self, texts):
-        # 修正：改成通用的標題，避免誤導
         texts = [f"title: 保險商品條款 | text: {t}" for t in texts]
         return super().embed_documents(texts)
 
@@ -35,48 +60,33 @@ class EmbeddingGemmaEmbeddings(HuggingFaceEmbeddings):
         return super().embed_query(f"task: search result | query: {text}")
 
 # ==========================================
-# 3. 系統初始化與資料庫下載
+# 4. 載入資源 (下載 -> 解壓 -> 讀取)
 # ==========================================
-st.set_page_config(page_title="專業保險諮詢 AI", layout="wide")
-st.title("🛡️ 專業保險諮詢與推薦系統")
-
-if "GROQ_API_KEY" in st.secrets:
-    os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
-    api_key = st.secrets["GROQ_API_KEY"]
-else:
-    st.error("❌ 未設定 GROQ_API_KEY，請至 Streamlit Secrets 進行設定。")
-    st.stop()
-
 @st.cache_resource
 def load_resources():
     folder_name = "faiss_db_checkpoint"
     zip_name = "faiss_db_checkpoint.zip"
     
-    # 1. 檢查資料庫是否存在，不存在則下載
+    # 下載與解壓縮
     if not os.path.exists(folder_name):
         if not os.path.exists(zip_name):
-            if "請將您的" in GDRIVE_FILE_ID:
-                st.error("⚠️ 請先在 app.py 第 16 行填入正確的 Google Drive File ID！")
-                st.stop()
-                
-            with st.spinner("📦 正在從雲端下載資料庫 (初次啟動需時較長)..."):
+            with st.spinner("📦 正在從雲端下載資料庫..."):
                 try:
                     url = f'https://drive.google.com/uc?id={GDRIVE_FILE_ID}'
                     gdown.download(url, zip_name, quiet=False)
                 except Exception as e:
-                    st.error(f"下載失敗，請確認 File ID 正確且權限已開。錯誤: {e}")
-                    st.stop()
+                    st.error(f"下載失敗: {e}")
+                    return None
         
-        # 2. 解壓縮
         with st.spinner("📂 正在解壓縮資料庫..."):
             try:
                 with zipfile.ZipFile(zip_name, 'r') as zip_ref:
-                    zip_ref.extractall(".") # 解壓到當前目錄
+                    zip_ref.extractall(".")
             except Exception as e:
                 st.error(f"解壓縮失敗: {e}")
-                st.stop()
+                return None
 
-    # 3. 載入 FAISS
+    # 載入 FAISS
     try:
         embeddings = EmbeddingGemmaEmbeddings()
         db = FAISS.load_local(
@@ -86,6 +96,7 @@ def load_resources():
         )
         return db
     except Exception as e:
+        # 如果還是失敗，很有可能是 token 權限或網路問題
         st.error(f"資料庫讀取失敗：{e}")
         return None
 
@@ -105,7 +116,7 @@ llm = ChatOpenAI(
 )
 
 # ==========================================
-# 4. Prompt 設定
+# 5. Prompt 設定
 # ==========================================
 persona_instruction = """
 你是專業且充滿熱忱的保險業務員，致力於提供最優質的服務。
@@ -114,7 +125,7 @@ persona_instruction = """
 請務必嚴格遵守以下規則：
 1. **只能**根據下方的【已知資訊】來回答問題。
 2. 若資料不足或題目超過能力範圍，請回答：「不好意思，目前的內部資料庫中沒有相關資訊，建議您直接洽詢該保險公司的專人客服服務。」
-3. **拒絕回答**任何跟保險以外相關內容（例如：食譜、程式碼、旅遊景點等）。
+3. **拒絕回答**任何跟保險以外相關內容。
 4. 語氣保持親切友善、專業簡潔，並使用台灣繁體中文。
 """
 
@@ -139,7 +150,7 @@ qa_chain = RetrievalQA.from_chain_type(
 )
 
 # ==========================================
-# 5. 介面功能
+# 6. 介面功能
 # ==========================================
 tab1, tab2 = st.tabs(["💬 線上保險諮詢", "📋 智能保險推薦"])
 
