@@ -7,7 +7,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_openai import ChatOpenAI
-from huggingface_hub import login # 新增這個套件
+from huggingface_hub import login
 
 # ==========================================
 # 1. 系統設定與金鑰檢查
