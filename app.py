@@ -7,7 +7,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from langchain_openai import ChatOpenAI
+# === 關鍵修改：改用 Groq 原生整合 ===
+from langchain_groq import ChatGroq 
+from huggingface_hub import login
 
 # ==========================================
 # 1. 系統設定
@@ -26,23 +28,22 @@ else:
 # ==========================================
 # 2. 設定 Google Drive 下載
 # ==========================================
-# 這是您剛剛提供的檔案 ID
+# 您的檔案 ID
 GDRIVE_FILE_ID = "1SWLCi36AvdoOO8oTAflVD9luHyDKQbRL" 
 ZIP_NAME = "faiss_db_mini.zip"
 DB_FOLDER = "faiss_db_mini"
 
 # ==========================================
-# 3. 定義 Embedding 模型 (關鍵修改！)
+# 3. Embedding 模型 (MiniLM)
 # ==========================================
 def get_embeddings():
-    """使用與資料庫一致的 MiniLM 模型 (維度 384)"""
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={"device": "cpu"}
     )
 
 # ==========================================
-# 4. 載入資源 (下載 -> 解壓 -> 讀取)
+# 4. 載入資源
 # ==========================================
 @st.cache_resource
 def load_resources():
@@ -69,8 +70,7 @@ def load_resources():
     try:
         embeddings = get_embeddings()
         
-        # 嘗試載入資料庫
-        # 優先檢查 faiss_db_mini 資料夾，若無則檢查當前目錄
+        # 路徑檢查
         if os.path.exists(DB_FOLDER):
             load_path = DB_FOLDER
         else:
@@ -85,7 +85,6 @@ def load_resources():
         return db
     except Exception as e:
         st.error(f"資料庫讀取失敗：{e}")
-        st.info("提示：請確認 requirements.txt 是否包含 faiss-cpu 與 sentence-transformers")
         return None
 
 vectorstore = load_resources()
@@ -95,16 +94,18 @@ if not vectorstore:
 
 retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
-# 設定 LLM (使用 Groq)
-llm = ChatOpenAI(
-    base_url="https://api.groq.com/openai/v1",
+# ==========================================
+# 5. 設定 LLM (關鍵修改：ChatGroq)
+# ==========================================
+# 使用 Groq 原生連接器，避免 BadRequest 錯誤
+llm = ChatGroq(
     api_key=api_key,
-    model="llama3-70b-8192", 
-    temperature=0.3,         
+    model="llama-3.3-70b-versatile", # 使用最新穩定版模型
+    temperature=0.3,
 )
 
 # ==========================================
-# 5. Prompt 與 Chain 設定
+# 6. Prompt 與 Chain
 # ==========================================
 persona_instruction = """
 你是專業且充滿熱忱的保險業務員，致力於提供最優質的服務。
@@ -134,7 +135,7 @@ qa_chain = (
 )
 
 # ==========================================
-# 6. 介面功能
+# 7. 介面功能
 # ==========================================
 tab1, tab2 = st.tabs(["💬 線上保險諮詢", "📋 智能保險推薦"])
 

@@ -1,19 +1,12 @@
 streamlit
 gdown
-
-# === 更新 LangChain 到支援 Pydantic v2 的版本 ===
-langchain>=0.3.0
-langchain-community>=0.3.0
-langchain-core>=0.3.0
-langchain-huggingface>=0.1.0
-langchain-openai>=0.2.0
-
-# === 明確指定 Pydantic v2 兼容版本 ===
-pydantic>=2.0.0,<3.0.0
-pydantic-core>=2.0.0,<3.0.0
-
+langchain
+langchain-community
+langchain-huggingface
+langchain-openai
+langchain-groq
 faiss-cpu
-transformers
 sentence-transformers
 huggingface-hub
 groq
+pydantic
