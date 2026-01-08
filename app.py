@@ -251,9 +251,9 @@ with tab1:
                     st.error(f"發生錯誤：{e}")
 
 with tab2:
-    st.subheader("📋 全方位智能保險規劃書")
+    st.subheader("📋 全方位智能保險規劃書 (V6.0 經理人整合版)")
     
-    # --- 1. KYC (Know Your Customer) 更完整的資料蒐集 ---
+    # --- 1. KYC (Know Your Customer) 完整的資料蒐集 ---
     with st.container(border=True):
         st.markdown("#### 👤 第一步：建立您的風險檔案")
         col1, col2 = st.columns(2)
@@ -263,62 +263,96 @@ with tab2:
             job = st.text_input("職業 (影響費率關鍵)", "軟體工程師", help="請盡量詳細，例如：內勤行政、外送員、建築工人")
         with col2:
             salary = st.selectbox("年收入", ["50萬以下", "50-100萬", "100-200萬", "200萬以上", "不便透露"])
-            # 新增：家庭狀況 (這是經理人最在意的點！)
+            # ✅ 新增：家庭狀況 (經理人最在意的點！)
             family_status = st.selectbox("家庭責任", ["單身未婚", "已婚無子", "已婚有子 (小孩幼齡)", "已婚有子 (小孩已獨立)", "單親家庭"])
         
         st.markdown("#### 🛡️ 第二步：您的保險需求")
         col3, col4 = st.columns(2)
         with col3:
-            ins_type = st.selectbox("想規劃的險種", ["醫療險 (實支實付/日額)", "意外險 (傷害保險)", "重大傷病/癌症險", "壽險 (定期/終身)", "儲蓄/理財險", "旅遊平安險"])
+            # 這裡保留防呆選單
+            ins_type = st.selectbox("想規劃的險種", 
+                ["壽險 (定期/終身)", "醫療險 (實支實付/日額)", "意外險 (傷害保險)", "重大傷病/癌症險", "儲蓄/理財險", "旅遊平安險"]
+            )
         with col4:
-            budget = st.text_input("預算範圍", "例如：月繳 3,000 元 或 年繳 4 萬元")
+            budget = st.text_input("預算範圍", "例如：月繳 3,000 元")
 
         # 特殊欄位：旅遊險
         extra_info = ""
         if "旅遊" in ins_type:
             dest = st.text_input("旅遊國家", "日本")
-            days = st.number_input("旅遊天數", 1, 365, 5)
+            days = st.number_input("天數", 1, 365, 5)
             extra_info = f"預計前往{dest}旅遊{days}天"
 
-        # 經理人建議：增加「既有保單」的詢問，避免重複投保
+        # ✅ 新增：既有保單詢問
         has_insurance = st.checkbox("我已有類似保險 (希望 AI 協助檢視缺口或加強保障)")
         extra_info += "。已有類似保單，請著重在補強缺口。" if has_insurance else "。目前無此類保單，屬於新投保。"
 
     # --- 2. 開始分析 ---
-    if st.button("🚀 生成專業建議書", type="primary"): # 用 primary 色系強調按鈕
+    if st.button("🚀 生成專業建議書", type="primary"):
         with st.spinner("🤖 AI 顧問正在進行交叉比對與條款分析..."):
+            
             # ==========================================
-            # 🔥 經理人級 Prompt：要求結構化輸出與表格
+            # 🔧 引擎核心：V5.0 強力搜尋邏輯 (整合進來)
+            # ==========================================
+            # 為了避免只找到同一家，我們必須在這裡重新定義檢索器
+            retriever_manager = vectorstore.as_retriever(
+                search_type="mmr", 
+                search_kwargs={"k": 6, "fetch_k": 100, "lambda_mult": 0.5}
+            )
+
+            # 設定純淨搜尋關鍵字 (避免被個資干擾)
+            search_keyword = f"{ins_type} 條款 保單"
+            if "旅遊" in ins_type:
+                search_keyword += f" {dest}"
+
+            # 手動執行檢索
+            retrieved_docs = retriever_manager.invoke(search_keyword)
+
+            # --- Debug 視窗 (確認有沒有抓到不同家) ---
+            with st.expander("🕵️ [工程師模式] 檢索到的候選名單"):
+                if not retrieved_docs:
+                    st.warning("⚠️ 無法檢索到相關條款。")
+                for i, doc in enumerate(retrieved_docs):
+                    source = doc.metadata.get('source', doc.metadata.get('filename', '未知'))
+                    company = doc.metadata.get('company', '未知公司')
+                    st.markdown(f"**{i+1}. [{company}] {source}**")
+                    st.caption(doc.page_content[:100] + "...")
+
+            # ==========================================
+            # 🔥 經理人 Prompt (結合表格要求 + 嚴格過濾)
             # ==========================================
             query = f"""
             【客戶畫像 (KYC)】：
             - 基本資料：{gender}, {age}歲
             - 職業風險：{job} (請精準判斷職業等級 1-6 級)
             - 經濟能力：年收{salary}, 預算{budget}
-            - 家庭責任：{family_status} (🔥請重點分析此身份的風險缺口，例如有小孩需高壽險/意外險槓桿)
+            - 家庭責任：{family_status} (🔥請重點分析此身份的風險缺口)
             - 需求目標：{ins_type}
             - 備註：{extra_info}
 
+            【嚴格過濾指令】：
+            1. **排除團體險**：除非客戶是企業，否則請忽略名稱含「團體」的商品。
+            2. **排除不符險種**：請專注於推薦 {ins_type}。
+            3. **強制差異化**：請務必嘗試推薦 **2 家不同保險公司** 的商品 (若資料庫有)。
+
             【任務指令】：
-            你是資深的保險經紀人，請根據資料庫檢索結果，產出一份專業建議書。
+            你是資深的保險經紀人，請閱讀下方的【檢索到的條款內容】，產出一份專業建議書。
             
-            1. **風險缺口分析**：根據「家庭責任」與「職業」，一針見血地點出客戶最該擔心的風險是什麼？
-            2. **精選雙商品比較**：請務必從資料庫找出 2 家不同保險公司的商品 (商品A vs 商品B)。
-            3. **表格化輸出**：請務必使用 Markdown Table 格式製作比較表。
+            1. **風險缺口分析**：根據「家庭責任」與「職業」，一針見血地點出客戶最該擔心的風險。
+            2. **精選雙商品比較**：挑選 2 個最合適的方案。
+            3. **表格化輸出**：務必使用 Markdown Table 製作比較表。
             
             【建議書輸出格式】：
             ### 📊 第一部分：您的風險雷達圖
-            (用文字描述該客戶目前的風險屬性，例如：家庭支柱、意外高風險群...)
+            (針對家庭與職業的風險分析...)
 
             ### 🏆 第二部分：精選方案推薦
-            我為您篩選了以下兩個最佳方案：
-
             #### 方案 A：[保險公司] - [商品名稱]
-            * **核心優勢**：(一句話亮點)
+            * **核心優勢**：...
             * **適合您的原因**：...
 
             #### 方案 B：[保險公司] - [商品名稱]
-            * **核心優勢**：(一句話亮點)
+            * **核心優勢**：...
             * **適合您的原因**：...
 
             ### ⚖️ 第三部分：超級比一比 (Comparison Table)
@@ -331,21 +365,22 @@ with tab2:
             | 推薦指數 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
 
             ### 💡 經理人總結
-            (給客戶的最終中肯建議)
+            (給客戶的最終建議)
             """
             
-            # Debug 區塊 (保留給您自己看)
-            retrieved_docs = retriever.invoke(query)
-            with st.expander("🕵️ [工程師模式] 查看 AI 引用了哪些條款"):
-                for i, doc in enumerate(retrieved_docs):
-                    source = doc.metadata.get('source', doc.metadata.get('filename', '未知'))
-                    company = doc.metadata.get('company', '未知公司')
-                    st.markdown(f"**{i+1}. {company} - {source}**")
-                    st.caption(doc.page_content[:200] + "...")
+            try:
+                # 將檢索到的資料注入 Prompt
+                docs_text = "\n\n".join(f"來源: {d.metadata.get('source', '未知')}\n內容: {d.page_content}" for d in retrieved_docs)
+                
+                # 建立臨時 Chain 來執行這個特殊任務
+                prompt_template = ChatPromptTemplate.from_template(query + "\n\n【檢索到的條款內容】：\n{context}")
+                chain = prompt_template | llm | StrOutputParser()
+                
+                response = chain.invoke({"context": docs_text})
+                st.markdown(response)
 
-            # 生成回答
-            response = qa_chain.invoke(query)
-            st.markdown(response)
-
-            # --- 3. 專業結尾 (免責聲明) ---
-            st.info("💡 **經理人小叮嚀**：\n本建議書由 AI 系統依據現有條款資料庫生成，僅供初步規劃參考。實際承保內容、費率與理賠條件，請務必以保險公司正式保單條款為準。建議您投保前諮詢真人業務員進行最終確認。")
+                # --- 3. 專業結尾 ---
+                st.info("💡 **經理人小叮嚀**：\n本建議書由 AI 系統依據現有條款資料庫生成，僅供初步規劃參考。實際承保內容、費率與理賠條件，請務必以保險公司正式保單條款為準。")
+                
+            except Exception as e:
+                st.error(f"分析過程發生錯誤: {e}")
