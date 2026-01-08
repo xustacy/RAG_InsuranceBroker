@@ -147,7 +147,7 @@ qa_chain = (
 tab1, tab2 = st.tabs(["💬 線上保險諮詢", "📋 智能保險推薦"])
 
 with tab1:
-    st.subheader("💬 深度保險諮詢 (V11.0 資深理賠顧問版)")
+    st.subheader("💬 深度保險諮詢 (V12.0 誠實防幻覺版)")
     
     # 初始化歷史訊息
     if "messages" not in st.session_state:
@@ -159,9 +159,8 @@ with tab1:
             st.markdown(message["content"])
 
     # 處理使用者輸入
-    if user_input := st.chat_input("請輸入您的問題 (例如：手術險有包含門診手術嗎？)..."):
+    if user_input := st.chat_input("請輸入您的問題 (例如：癌症險的等待期是多久？)..."):
         
-        # 1. 顯示使用者問題
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
@@ -169,55 +168,35 @@ with tab1:
         with st.chat_message("assistant"):
             with st.spinner("🧠 顧問正在調閱過往對話與條款細節..."):
                 try:
-                    # ==========================================
-                    # 🔧 引擎 1：對話歷史重組 (解決「金魚腦」問題)
-                    # ==========================================
-                    # 只有當有歷史對話時才執行重寫
+                    # --- 1. 對話重寫 (維持原樣) ---
                     search_query = user_input
                     history_context = ""
-                    
                     if len(st.session_state.messages) > 1:
-                        # 取出最近 4 句對話當作背景
                         recent_history = st.session_state.messages[-5:-1] 
                         history_text = "\n".join([f"{m['role']}: {m['content']}" for m in recent_history])
-                        
-                        # 建立一個輕量級 LLM 來負責「翻譯」問題
                         llm_rewriter = ChatGroq(api_key=api_key, model="llama-3.1-8b-instant", temperature=0.1)
-                        
                         rewrite_prompt = f"""
                         你是搜尋優化專家。請根據【對話歷史】將使用者的【最新問題】改寫成一個完整、獨立的搜尋語句。
-                        
-                        【對話歷史】：
-                        {history_text}
-                        
-                        【最新問題】：
-                        {user_input}
-                        
-                        【任務】：
-                        如果最新問題依賴於歷史(例如只說「那併發症呢?」)，請補全主詞(例如「癌症險的併發症是否理賠?」)。
-                        如果最新問題已經很完整，請直接輸出原句。
+                        【對話歷史】：{history_text}
+                        【最新問題】：{user_input}
                         **只輸出改寫後的句子，不要有任何解釋。**
                         """
-                        # 執行重寫
                         search_query = llm_rewriter.invoke(rewrite_prompt).content
-                        # (選擇性) 可以在這裡 print 出來 debug
-                        # print(f"原始問題: {user_input} -> 優化搜尋: {search_query}")
 
                     # ==========================================
-                    # 🔧 引擎 2：核保級強力搜尋 (同步 Tab 2 規格)
+                    # 🔧 修改 1：加大 k 值 (讓它讀更多，避免漏看條款)
                     # ==========================================
                     retriever_expert = vectorstore.as_retriever(
                         search_type="mmr", 
-                        search_kwargs={"k": 6, "fetch_k": 1000, "lambda_mult": 0.5}
+                        # 將 k 從 6 加大到 10，確保名詞定義章節能被讀到
+                        search_kwargs={"k": 10, "fetch_k": 1000, "lambda_mult": 0.5}
                     )
                     
-                    # 使用「優化後的句子」去搜尋，精準度會大增
                     retrieved_docs = retriever_expert.invoke(search_query)
 
-                    # Debug 視窗：讓您看到 AI 到底查了什麼
                     with st.expander(f"🕵️ [理賠視角] 搜尋語句：「{search_query}」"):
                         if not retrieved_docs:
-                            st.warning("⚠️ 查無相關條款，請嘗試更具體的關鍵字。")
+                            st.warning("⚠️ 查無相關條款。")
                         for i, doc in enumerate(retrieved_docs):
                             source = doc.metadata.get('source', '未知')
                             company = doc.metadata.get('company', '未知公司')
@@ -225,14 +204,13 @@ with tab1:
                             st.caption(doc.page_content[:150] + "...")
 
                     # ==========================================
-                    # 🔧 引擎 3：理賠顧問 Prompt (Chain of Thought)
+                    # 🔧 修改 2：Prompt 加入「誠實指令」
                     # ==========================================
-                    # 使用低溫模型，確保回答嚴謹
                     llm_advisor = ChatGroq(api_key=api_key, model="llama-3.1-8b-instant", temperature=0.1)
 
                     persona_prompt = """
                     你是具備 20 年經驗的「資深保險理賠顧問」。
-                    你的工作不是只有讀條款，而是要幫客戶「解釋條款背後的邏輯」與「實務理賠眉角」。
+                    你的工作是根據【已知條款資訊】回答客戶問題。
 
                     【已知條款資訊】：
                     {context}
@@ -240,23 +218,25 @@ with tab1:
                     【使用者問題】：
                     {question}
 
-                    【回答策略 (請嚴格遵守)】：
-                    1. **直球對決**：第一句話直接回答 Yes/No 或重點結論。
-                    2. **條款依據**：引用條款中的關鍵字 (例如：「根據第 X 條...」)。
-                    3. **名詞解釋**：如果條款有專有名詞 (如「既往症」、「等待期」)，請用白話文解釋給客戶聽。
-                    4. **🚨 專家警示 (除外責任)**：這是最重要的！請主動告知**「什麼情況下不賠」**。專家就是要能看到陷阱。
-                    5. **舉例說明**：請設計一個簡短的情境 (例如：小明發生了...) 來輔助說明。
-                    6. **資料來源**：請在最後註明參考了哪一份文件。
+                    【🔥 最高指導原則 (防幻覺)】：
+                    1. **找不到就說找不到**：如果你在【已知條款資訊】中**沒有看到**相關規定(例如等待期天數)，請直接回答：「**目前的資料庫條款中，未包含關於此問題的具體數值。**」
+                    2. **嚴禁推論「沒有規定」**：絕對**不可以**回答「沒有明確規定」或「沒有等待期」，除非條款裡白紙黑字寫著「本險種無等待期」。
+                    3. **常識補充**：若查無資料，你可以補充保險常識，但必須強調「**這是一般通則，實際請以保單條款為準**」。(例如：一般癌症險等待期通常為 30~90 天)。
 
-                    請用台灣繁體中文，以專業、詳盡且有溫度的口吻回答：
+                    【回答結構】：
+                    1. **直球對決**：(有查到就回答數值；沒查到就誠實說資料不足)。
+                    2. **條款依據**：引用條款關鍵字。
+                    3. **名詞解釋**：解釋專有名詞。
+                    4. **🚨 專家警示**：主動告知除外責任或陷阱。
+                    5. **資料來源**：註明參考文件。
+
+                    請用台灣繁體中文，專業且誠實地回答：
                     """
 
                     qa_chain_expert = ChatPromptTemplate.from_template(persona_prompt) | llm_advisor | StrOutputParser()
 
-                    # 準備 Context
                     docs_text = "\n\n".join(f"來源: {d.metadata.get('source', '未知')}\n內容: {d.page_content}" for d in retrieved_docs)
                     
-                    # 生成回答
                     response = qa_chain_expert.invoke({"context": docs_text, "question": user_input})
                     
                     st.markdown(response)
@@ -264,7 +244,6 @@ with tab1:
 
                 except Exception as e:
                     st.error(f"發生錯誤：{e}")
-
 with tab2:
     st.subheader("📋 全方位智能保險規劃書 (V10.0 核保風險評估版)")
     
